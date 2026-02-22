@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>宏观调仓控制台</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f5f7; color: #333; padding: 20px; margin: 0; }
+        .container { max-width: 500px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        h2 { text-align: center; margin-top: 0; color: #1a1a1a; font-size: 22px; }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 14px; }
+        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; background-color: #fafafa; }
+        .gold-info { background: #fff8e1; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; font-size: 14px; color: #b77900; border: 1px solid #ffe082; }
+        .btn-group { display: flex; gap: 10px; margin-top: 25px; }
+        button { flex: 1; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; color: white; cursor: pointer; }
+        .btn-attack { background-color: #34c759; }
+        .btn-defense { background-color: #ff3b30; }
+        #result { margin-top: 25px; padding: 15px; background: #f8f9fa; border-left: 4px solid #007aff; border-radius: 0 8px 8px 0; display: none; }
+        .result-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #1a1a1a; }
+        .action-list { list-style-type: none; padding: 0; margin: 0; }
+        .action-list li { padding: 10px 0; border-bottom: 1px dashed #ccc; font-size: 16px; line-height: 1.4; }
+        .sell { color: #ff3b30; font-weight: bold; }
+        .buy { color: #34c759; font-weight: bold; }
+        .hold { color: #8e8e93; }
+        .note { font-size: 12px; color: #888; margin-top: 20px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🎯 宏观阵型 Delta 计算器</h2>
+    
+    <div class="gold-info">
+        实时国内金价：<strong id="display_gold_price">获取中...</strong>
+    </div>
+
+    <div class="input-group">
+        <label>💵 1. 当前 现金短债 金额 (元)</label>
+        <input type="number" id="v_bond" placeholder="输入金额..." inputmode="numeric">
+    </div>
+    <div class="input-group">
+        <label>💰 2. 当前 红利长债 金额 (元)</label>
+        <input type="number" id="v_div" placeholder="输入金额..." inputmode="numeric">
+    </div>
+    <div class="input-group">
+        <label>📈 3. 当前 纳指 ETF 金额 (元)</label>
+        <input type="number" id="v_nas" placeholder="输入金额..." inputmode="numeric">
+    </div>
+    <div class="input-group">
+        <label>🥇 4. 当前 黄金 ETF 金额 (元)</label>
+        <input type="number" id="v_gold_etf" placeholder="输入金额..." inputmode="numeric">
+    </div>
+    <div class="input-group" style="background:#f9f9f9; padding:10px; border-radius:8px;">
+        <label>🔒 5. 实物/积存金底仓 (克)</label>
+        <input type="number" id="v_gold_grams" placeholder="输入克数 (浏览器自动记忆)" inputmode="numeric" style="background:#fff;">
+    </div>
+
+    <div class="btn-group">
+        <button class="btn-attack" onclick="calculate('attack')">🟩 算进攻期</button>
+        <button class="btn-defense" onclick="calculate('defense')">🟥 算防御期</button>
+    </div>
+
+    <div id="result"></div>
+    <div class="note">操作准则：先执行卖出以回笼资金，差额不足使用余额宝垫资。</div>
+</div>
+
+<script>
+    // 1. 从 URL 提取 Python 后端传来的金价
+    const urlParams = new URLSearchParams(window.location.search);
+    const goldPriceCNY = parseFloat(urlParams.get('gold')) || 0;
+    document.getElementById('display_gold_price').innerText = goldPriceCNY > 0 ? `¥${goldPriceCNY.toFixed(2)} /克` : "未获取到金价(请通过钉钉链接打开)";
+
+    // 2. 页面加载时，读取上次记住的实物金克数
+    window.onload = function() {
+        const savedGrams = localStorage.getItem('macro_gold_grams');
+        if (savedGrams) document.getElementById('v_gold_grams').value = savedGrams;
+    };
+
+    function calculate(state) {
+        const bond = Number(document.getElementById('v_bond').value) || 0;
+        const div = Number(document.getElementById('v_div').value) || 0;
+        const nas = Number(document.getElementById('v_nas').value) || 0;
+        const gold_etf = Number(document.getElementById('v_gold_etf').value) || 0;
+        const gold_grams = Number(document.getElementById('v_gold_grams').value) || 0;
+
+        // 保存克数到本地手机缓存
+        localStorage.setItem('macro_gold_grams', gold_grams);
+
+        // 计算实物金总价值
+        const gold_phys_value = gold_grams * goldPriceCNY;
+        const total = bond + div + nas + gold_etf + gold_phys_value;
+
+        if (total === 0) { alert("请输入当前资产余额！"); return; }
+
+        let t_bond, t_div, t_nas, t_gold_total;
+        let stateName = state === 'attack' ? "🟩 进攻期 (科技主升浪)" : "🟥 防御期 (避险衰退)";
+        
+        if (state === 'attack') {
+            t_bond = total * 0.10; t_div = total * 0.10; t_nas = total * 0.60; t_gold_total = total * 0.20;
+        } else {
+            t_bond = total * 0.30; t_div = total * 0.20; t_nas = total * 0.10; t_gold_total = total * 0.40;
+        }
+
+        const d_bond = t_bond - bond;
+        const d_div = t_div - div;
+        const d_nas = t_nas - nas;
+        const d_gold_total = t_gold_total - (gold_phys_value + gold_etf);
+
+        let actions = [];
+
+        // 基础资产动作格式化 (100元阈值过滤)
+        const formatBasicAction = (name, delta) => {
+            if (Math.abs(delta) < 100) return { type: 'hold', text: `<span class="hold">⚪ 稳住 ${name}：无需操作 (偏差 < 100元)</span>` };
+            if (delta > 0) return { type: 'buy', text: `<span class="buy">🟢 买入 ${name}：¥${Math.round(delta).toLocaleString()}</span>` };
+            return { type: 'sell', text: `<span class="sell">🔴 卖出 ${name}：¥${Math.round(-delta).toLocaleString()}</span>` };
+        };
+
+        actions.push(formatBasicAction('纳指 ETF', d_nas));
+        actions.push(formatBasicAction('现金短债', d_bond));
+        actions.push(formatBasicAction('红利长债', d_div));
+
+        // 黄金精准拆分逻辑
+        if (Math.abs(d_gold_total) < 100) {
+            actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 黄金资产：无需操作 (偏差 < 100元)</span>` });
+        } else if (d_gold_total > 0) {
+            actions.push({ type: 'buy', text: `<span class="buy">🟢 买入 黄金 ETF：¥${Math.round(d_gold_total).toLocaleString()}</span>` });
+        } else {
+            // 黄金总额超标，需要卖出
+            let sell_amount = Math.abs(d_gold_total);
+            if (sell_amount <= gold_etf) {
+                // ETF 足够卖
+                actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(sell_amount).toLocaleString()}</span>` });
+            } else {
+                // ETF 不够卖，触达实物金底线
+                if (gold_etf > 0) {
+                    actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(gold_etf).toLocaleString()} (已清空)</span>` });
+                }
+                let phys_sell = sell_amount - gold_etf;
+                if (phys_sell >= 100) {
+                    actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 实物/积存金：¥${Math.round(phys_sell).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(若防守底仓不缺资金，请自行忽略此条)</span></span>` });
+                }
+            }
+        }
+
+        // 排序：先展示卖出动作(回笼资金)，再展示买入动作，最后是稳住不动
+        actions.sort((a, b) => {
+            const order = { 'sell': 1, 'buy': 2, 'hold': 3 };
+            return order[a.type] - order[b.type];
+        });
+
+        let resDiv = document.getElementById('result');
+        resDiv.innerHTML = `
+            <div class="result-title">总资产基数: ¥${Math.round(total).toLocaleString()}</div>
+            <div style="font-size:13px; color:#777; margin-bottom:12px;">(含实物金估值 ¥${Math.round(gold_phys_value).toLocaleString()})</div>
+            <div style="font-size:14px; margin-bottom:10px; color:#555;">目标阵型: ${stateName}</div>
+            <ul class="action-list">${actions.map(a => `<li>${a.text}</li>`).join('')}</ul>
+        `;
+        resDiv.style.display = 'block';
+    }
+</script>
+</body>
+</html>
