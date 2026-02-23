@@ -14,7 +14,7 @@
         .input-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 14px; }
         input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; background-color: #fafafa; }
-        .gold-info { background: #fff8e1; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; font-size: 14px; color: #b77900; border: 1px solid #ffe082; }
+        .gold-info { background: #fff8e1; padding: 10px 15px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; color: #b77900; border: 1px solid #ffe082; }
         .btn-group { display: flex; gap: 10px; margin-top: 25px; }
         button { flex: 1; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; color: white; cursor: pointer; }
         .btn-attack { background-color: #34c759; }
@@ -27,6 +27,9 @@
         .buy { color: #34c759; font-weight: bold; }
         .hold { color: #8e8e93; }
         .note { font-size: 12px; color: #888; margin-top: 20px; text-align: center; }
+        /* 阈值设置区域的特殊样式 */
+        .settings-group { background: #f0f8ff; padding: 15px; border-radius: 8px; border: 1px solid #cce5ff; margin-top: 20px; margin-bottom: 10px;}
+        .settings-group label { color: #004085; }
     </style>
 </head>
 <body>
@@ -54,9 +57,15 @@
         <label>🥇 4. 当前 黄金 ETF 金额 (元)</label>
         <input type="number" id="v_gold_etf" placeholder="输入金额..." inputmode="numeric">
     </div>
-    <div class="input-group" style="background:#f9f9f9; padding:10px; border-radius:8px;">
+    <div class="input-group" style="background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom: 0;">
         <label>🔒 5. 实物/积存金底仓 (克)</label>
         <input type="number" id="v_gold_grams" placeholder="输入克数 (浏览器自动记忆)" inputmode="numeric" style="background:#fff;">
+    </div>
+
+    <div class="settings-group">
+        <label for="v_threshold">⚖️ 调仓忽略阈值 (元)</label>
+        <div style="font-size: 12px; color: #666; margin-bottom: 8px;">净值漂移小于此金额时将不提示调仓（防滑点）</div>
+        <input type="number" id="v_threshold" value="100" min="0" step="50" inputmode="numeric" style="background:#fff;">
     </div>
 
     <div class="btn-group">
@@ -74,10 +83,16 @@
     const goldPriceCNY = parseFloat(urlParams.get('gold')) || 0;
     document.getElementById('display_gold_price').innerText = goldPriceCNY > 0 ? `¥${goldPriceCNY.toFixed(2)} /克` : "未获取到金价(请通过钉钉链接打开)";
 
-    // 2. 页面加载时，读取上次记住的实物金克数
+    // 2. 页面加载时，读取上次记住的实物金克数和调仓阈值
     window.onload = function() {
         const savedGrams = localStorage.getItem('macro_gold_grams');
         if (savedGrams) document.getElementById('v_gold_grams').value = savedGrams;
+
+        // 读取历史阈值
+        const savedThreshold = localStorage.getItem('macro_threshold');
+        if (savedThreshold !== null) {
+            document.getElementById('v_threshold').value = savedThreshold;
+        }
     };
 
     function calculate(state) {
@@ -86,9 +101,13 @@
         const nas = Number(document.getElementById('v_nas').value) || 0;
         const gold_etf = Number(document.getElementById('v_gold_etf').value) || 0;
         const gold_grams = Number(document.getElementById('v_gold_grams').value) || 0;
+        
+        // 动态获取当前设置的阈值
+        const currentThreshold = Number(document.getElementById('v_threshold').value) || 0;
 
-        // 保存克数到本地手机缓存
+        // 保存克数和阈值到本地手机缓存
         localStorage.setItem('macro_gold_grams', gold_grams);
+        localStorage.setItem('macro_threshold', currentThreshold);
 
         // 计算实物金总价值
         const gold_phys_value = gold_grams * goldPriceCNY;
@@ -112,9 +131,9 @@
 
         let actions = [];
 
-        // 基础资产动作格式化 (100元阈值过滤)
+        // 使用动态阈值进行判断
         const formatBasicAction = (name, delta) => {
-            if (Math.abs(delta) < 100) return { type: 'hold', text: `<span class="hold">⚪ 稳住 ${name}：无需操作 (偏差 < 100元)</span>` };
+            if (Math.abs(delta) <= currentThreshold) return { type: 'hold', text: `<span class="hold">⚪ 稳住 ${name}：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` };
             if (delta > 0) return { type: 'buy', text: `<span class="buy">🟢 买入 ${name}：¥${Math.round(delta).toLocaleString()}</span>` };
             return { type: 'sell', text: `<span class="sell">🔴 卖出 ${name}：¥${Math.round(-delta).toLocaleString()}</span>` };
         };
@@ -123,9 +142,9 @@
         actions.push(formatBasicAction('现金短债', d_bond));
         actions.push(formatBasicAction('红利长债', d_div));
 
-        // 黄金精准拆分逻辑
-        if (Math.abs(d_gold_total) < 100) {
-            actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 黄金资产：无需操作 (偏差 < 100元)</span>` });
+        // 黄金判断逻辑
+        if (Math.abs(d_gold_total) <= currentThreshold) {
+            actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 黄金资产：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` });
         } else if (d_gold_total > 0) {
             actions.push({ type: 'buy', text: `<span class="buy">🟢 买入 黄金 ETF：¥${Math.round(d_gold_total).toLocaleString()}</span>` });
         } else {
@@ -140,7 +159,8 @@
                     actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(gold_etf).toLocaleString()} (已清空)</span>` });
                 }
                 let phys_sell = sell_amount - gold_etf;
-                if (phys_sell >= 100) {
+                // 实物金超额部分需大于阈值才提示卖出
+                if (phys_sell > currentThreshold) {
                     actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 实物/积存金：¥${Math.round(phys_sell).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(若防守底仓不缺资金，请自行忽略此条)</span></span>` });
                 }
             }
