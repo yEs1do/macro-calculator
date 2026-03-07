@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>宏观调仓控制台</title>
+    <title>宏观动量调仓控制台</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f5f7; color: #333; padding: 20px; margin: 0; }
         .container { max-width: 500px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
@@ -35,7 +35,7 @@
 <body>
 
 <div class="container">
-    <h2>🎯 宏观阵型 Delta 计算器</h2>
+    <h2>🎯 宏观动量 Delta 计算器</h2>
     
     <div class="gold-info">
         实时国内金价：<strong id="display_gold_price">获取中...</strong>
@@ -57,9 +57,13 @@
         <label>🥇 4. 当前 黄金 ETF 金额 (元)</label>
         <input type="number" id="v_gold_etf" placeholder="输入金额..." inputmode="numeric">
     </div>
-    <div class="input-group" style="background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom: 0;">
+    <div class="input-group" style="background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom: 15px;">
         <label>🔒 5. 实物/积存金底仓 (克)</label>
         <input type="number" id="v_gold_grams" placeholder="输入克数 (浏览器自动记忆)" inputmode="numeric" style="background:#fff;">
+    </div>
+    <div class="input-group">
+        <label>🚀 6. 当前 动量策略 金额 (元)</label>
+        <input type="number" id="v_mom" placeholder="输入金额 (若为0则仅计算宏观)" value="0" inputmode="numeric">
     </div>
 
     <div class="settings-group">
@@ -74,7 +78,7 @@
     </div>
 
     <div id="result"></div>
-    <div class="note">操作准则：先执行卖出以回笼资金，差额不足使用余额宝垫资。</div>
+    <div class="note">操作准则：先执行卖出以回笼资金，差额不足使用垫资款抢跑。</div>
 </div>
 
 <script>
@@ -101,6 +105,7 @@
         const nas = Number(document.getElementById('v_nas').value) || 0;
         const gold_etf = Number(document.getElementById('v_gold_etf').value) || 0;
         const gold_grams = Number(document.getElementById('v_gold_grams').value) || 0;
+        const mom = Number(document.getElementById('v_mom').value) || 0;
         
         // 动态获取当前设置的阈值
         const currentThreshold = Number(document.getElementById('v_threshold').value) || 0;
@@ -111,72 +116,136 @@
 
         // 计算实物金总价值
         const gold_phys_value = gold_grams * goldPriceCNY;
-        const total = bond + div + nas + gold_etf + gold_phys_value;
+        const macro_total_actual = bond + div + nas + gold_etf + gold_phys_value;
+        const global_total = macro_total_actual + mom;
 
-        if (total === 0) { alert("请输入当前资产余额！"); return; }
-
-        let t_bond, t_div, t_nas, t_gold_total;
-        let stateName = state === 'attack' ? "🟩 进攻期 (科技主升浪)" : "🟥 防御期 (避险衰退)";
-        
-        if (state === 'attack') {
-            t_bond = total * 0.10; t_div = total * 0.10; t_nas = total * 0.60; t_gold_total = total * 0.20;
-        } else {
-            t_bond = total * 0.30; t_div = total * 0.20; t_nas = total * 0.10; t_gold_total = total * 0.40;
-        }
-
-        const d_bond = t_bond - bond;
-        const d_div = t_div - div;
-        const d_nas = t_nas - nas;
-        const d_gold_total = t_gold_total - (gold_phys_value + gold_etf);
+        if (global_total === 0) { alert("请输入当前资产余额！"); return; }
 
         let actions = [];
+        let stateName = state === 'attack' ? "🟩 进攻期" : "🟥 防御期";
+        let target_macro_final = macro_total_actual;
+        let target_mom_final = mom;
 
-        // 使用动态阈值进行判断
-        const formatBasicAction = (name, delta) => {
-            if (Math.abs(delta) <= currentThreshold) return { type: 'hold', text: `<span class="hold">⚪ 稳住 ${name}：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` };
-            if (delta > 0) return { type: 'buy', text: `<span class="buy">🟢 买入 ${name}：¥${Math.round(delta).toLocaleString()}</span>` };
-            return { type: 'sell', text: `<span class="sell">🔴 卖出 ${name}：¥${Math.round(-delta).toLocaleString()}</span>` };
-        };
-
-        actions.push(formatBasicAction('纳指 ETF', d_nas));
-        actions.push(formatBasicAction('现金短债', d_bond));
-        actions.push(formatBasicAction('红利长债', d_div));
-
-        // 黄金判断逻辑
-        if (Math.abs(d_gold_total) <= currentThreshold) {
-            actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 黄金资产：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` });
-        } else if (d_gold_total > 0) {
-            actions.push({ type: 'buy', text: `<span class="buy">🟢 买入 黄金 ETF：¥${Math.round(d_gold_total).toLocaleString()}</span>` });
-        } else {
-            // 黄金总额超标，需要卖出
-            let sell_amount = Math.abs(d_gold_total);
-            if (sell_amount <= gold_etf) {
-                // ETF 足够卖
-                actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(sell_amount).toLocaleString()}</span>` });
+        // 【核心内部函数】：执行标准的宏观底盘内部再平衡
+        function runMacroRebalance(t_macro) {
+            let t_bond, t_div, t_nas, t_gold_total;
+            if (state === 'attack') {
+                t_bond = t_macro * 0.10; t_div = t_macro * 0.10; t_nas = t_macro * 0.60; t_gold_total = t_macro * 0.20;
             } else {
+                t_bond = t_macro * 0.30; t_div = t_macro * 0.20; t_nas = t_macro * 0.10; t_gold_total = t_macro * 0.40;
+            }
+
+            const d_bond = t_bond - bond;
+            const d_div = t_div - div;
+            const d_nas = t_nas - nas;
+            const d_gold_total = t_gold_total - (gold_phys_value + gold_etf);
+
+            const formatBasicAction = (name, delta) => {
+                if (Math.abs(delta) <= currentThreshold) return { type: 'hold', text: `<span class="hold">⚪ 稳住 ${name}：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` };
+                if (delta > 0) return { type: 'buy', text: `<span class="buy">🟢 买入 ${name}：¥${Math.round(delta).toLocaleString()}</span>` };
+                return { type: 'sell', text: `<span class="sell">🔴 卖出 ${name}：¥${Math.round(-delta).toLocaleString()}</span>` };
+            };
+
+            actions.push(formatBasicAction('纳指 ETF', d_nas));
+            actions.push(formatBasicAction('现金短债', d_bond));
+            actions.push(formatBasicAction('红利长债', d_div));
+            
+            // 黄金判断逻辑
+            if (Math.abs(d_gold_total) <= currentThreshold) {
+                actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 黄金资产：无需操作 (偏差 ≤ ${currentThreshold}元)</span>` });
+            } else if (d_gold_total > 0) {
+                actions.push({ type: 'buy', text: `<span class="buy">🟢 买入 黄金 ETF：¥${Math.round(d_gold_total).toLocaleString()}</span>` });
+            } else {
+                let sell_amount = Math.abs(d_gold_total);
+                if (sell_amount <= gold_etf) {
+                    actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(sell_amount).toLocaleString()}</span>` });
+                } else {
                 // ETF 不够卖，触达实物金底线
-                if (gold_etf > 0) {
-                    actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(gold_etf).toLocaleString()} (已清空)</span>` });
-                }
-                let phys_sell = sell_amount - gold_etf;
-                // 实物金超额部分需大于阈值才提示卖出
-                if (phys_sell > currentThreshold) {
-                    actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 实物/积存金：¥${Math.round(phys_sell).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(若防守底仓不缺资金，请自行忽略此条)</span></span>` });
+                    if (gold_etf > 0) {
+                        actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 黄金 ETF：¥${Math.round(gold_etf).toLocaleString()} (已清空)</span>` });
+                    }
+                    let phys_sell = sell_amount - gold_etf;
+                    if (phys_sell > currentThreshold) {
+                        actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 实物/积存金：¥${Math.round(phys_sell).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(若防守底仓不缺资金，请自行忽略此条)</span></span>` });
+                    }
                 }
             }
         }
 
-        // 排序：先展示卖出动作(回笼资金)，再展示买入动作，最后是稳住不动
+        // =====================================
+        // 🚨 跨策略收割机制与剥洋葱法 🚨
+        // =====================================
+        if (mom > 0) {
+            const mom_weight = mom / global_total;
+            if (mom_weight > 0.35) {
+                // 🔴 大赚收割 (>35%)
+                target_mom_final = global_total * 0.30;
+                target_macro_final = global_total * 0.70;
+                let sell_mom = mom - target_mom_final;
+                actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 动量策略：¥${Math.round(sell_mom).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(占比 ${(mom_weight*100).toFixed(1)}% 超35%，大赚收割反哺宏观)</span></span>` });
+                
+                // 执行标准的宏观内部分配 (带着卖出动量后的新资金池)
+                runMacroRebalance(target_macro_final);
+
+            } else if (mom_weight < 0.25) {
+                // 🟢 补血救济 (<25%) —— 严格执行剥洋葱法！
+                target_mom_final = global_total * 0.30;
+                target_macro_final = global_total * 0.70;
+                let shortfall = target_mom_final - mom;
+                
+                // 剥洋葱第一顺位：现金短债
+                let sell_bond = Math.min(shortfall, bond);
+                let rem_shortfall = shortfall - sell_bond;
+                // 剥洋葱第二顺位：红利长债
+                let sell_div = Math.min(rem_shortfall, div);
+                let total_rescued = sell_bond + sell_div;
+
+                if (total_rescued > 0) {
+                    actions.push({ type: 'buy', text: `<span class="buy">🟢 买入 动量策略：¥${Math.round(total_rescued).toLocaleString()}<br><span style="font-size:12px; font-weight:normal; color:#888;">(占比 ${(mom_weight*100).toFixed(1)}% 低于25%，触发剥洋葱法补血)</span></span>` });
+                    if (sell_bond > 0) actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 现金短债：¥${Math.round(sell_bond).toLocaleString()} (剥洋葱第一顺位)</span>` });
+                    if (sell_div > 0) actions.push({ type: 'sell', text: `<span class="sell">🔴 卖出 红利长债：¥${Math.round(sell_div).toLocaleString()} (剥洋葱第二顺位)</span>` });
+                } else {
+                    actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 动量策略：(虽低于25%，但防御塔短债/长债已空，绝不卖纳指黄金救济！)</span>` });
+                }
+                
+                // 🚨 救济期间，彻底锁定纳指与黄金，不允许系统下达买卖指令 (短暂失衡)
+                actions.push({ type: 'hold', text: `<span class="hold">🔒 锁定 纳指与黄金：本次调仓专为动量补血，系统允许宏观阵型短暂失衡，严禁卖出核心资产。</span>` });
+
+            } else {
+                // ⚪ 宽容度内 (25% ~ 35%)
+                target_mom_final = mom; // 目标等于实际
+                target_macro_final = macro_total_actual; // 目标等于实际
+                actions.push({ type: 'hold', text: `<span class="hold">⚪ 稳住 动量策略：无需操作 (占比 ${(mom_weight*100).toFixed(1)}% 在 25%-35% 宽容度内)</span>` });
+                
+                // 动量不动，只计算宏观底盘内部再平衡
+                runMacroRebalance(macro_total_actual);
+            }
+        } else {
+            // 如果没填动量(0)，直接算纯宏观底盘
+            target_mom_final = 0;
+            target_macro_final = macro_total_actual;
+            runMacroRebalance(macro_total_actual);
+        }
+
+        // 排序：先展示卖出动作(回笼资金)，再展示买入动作，最后是稳住不动/锁定
         actions.sort((a, b) => {
             const order = { 'sell': 1, 'buy': 2, 'hold': 3 };
             return order[a.type] - order[b.type];
         });
 
         let resDiv = document.getElementById('result');
+        let targetDisplay = `<div style="font-size:14px; margin-bottom:10px; color:#1a1a1a; background:#e8f0fe; padding:10px; border-radius:6px; font-weight:bold; border-left:4px solid #4285f4;">`;
+        targetDisplay += `🎯 目标分配:<br>`;
+        if (mom > 0) {
+            targetDisplay += `<span style="color:#e91e63;">动量策略: ¥${Math.round(target_mom_final).toLocaleString()}</span><br>`;
+        }
+        targetDisplay += `<span style="color:#007aff;">宏观底座: ¥${Math.round(target_macro_final).toLocaleString()}</span> <span style="font-weight:normal; font-size:12px;">[${stateName}]</span>`;
+        targetDisplay += `</div>`;
+
         resDiv.innerHTML = `
-            <div class="result-title">总资产基数: ¥${Math.round(total).toLocaleString()}</div>
-            <div style="font-size:13px; color:#777; margin-bottom:12px;">(含实物金估值 ¥${Math.round(gold_phys_value).toLocaleString()})</div>
-            <div style="font-size:14px; margin-bottom:10px; color:#555;">目标阵型: ${stateName}</div>
+            <div class="result-title">系统总金额: ¥${Math.round(global_total).toLocaleString()}</div>
+            <div style="font-size:13px; color:#777; margin-bottom:12px;">(实际分布 👉 宏观底座: ¥${Math.round(macro_total_actual).toLocaleString()}${mom > 0 ? ` | 动量: ¥${Math.round(mom).toLocaleString()}` : ''})</div>
+            ${targetDisplay}
             <ul class="action-list">${actions.map(a => `<li>${a.text}</li>`).join('')}</ul>
         `;
         resDiv.style.display = 'block';
